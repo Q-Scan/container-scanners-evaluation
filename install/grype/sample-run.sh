@@ -1,1 +1,1 @@
-grype python:3.4-alpine
+grype python:3.4-alpine -o sarif
