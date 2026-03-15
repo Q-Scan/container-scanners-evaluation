@@ -201,6 +201,19 @@ scan-everything: scan-all scan-sbom-all
 	@echo "   Results in $(IMAGE_RESULTS_DIR)/"
 
 # ============================================================================
+# BULK SCANNING TARGETS
+# ============================================================================
+
+.PHONY: scan-vulnerable-quarkus-local
+scan-vulnerable-quarkus-local:
+	@echo "🔍 Detecting local qscan.io/vulnerable-quarkus images..."
+	@IMAGES=$$(docker images --format '{{.Repository}}:{{.Tag}}' | grep "qscan.io/vulnerable-quarkus"); \
+	for img in $$IMAGES; do \
+		echo "🚀 Starting full scan for: $$img"; \
+		$(MAKE) scan-everything IMAGE=$$img; \
+	done
+
+# ============================================================================
 # UTILITIES
 # ============================================================================
 
@@ -218,9 +231,11 @@ help:
 	@echo "Examples:"
 	@echo "  make scan-everything IMAGE=python:3.4-alpine  # Run ALL scans"
 	@echo "  make scan-all IMAGE=nginx:latest              # Direct image scans only"
+	@echo "  make scan-vulnerable-quarkus-local           # Scan ALL local qscan.io/vulnerable-quarkus images"
 	@echo ""
-	@echo "=== MASTER COMMAND ==="
-	@echo "  scan-everything    Run ALL scans (direct + all SBOM combinations)"
+	@echo "=== MASTER COMMANDS ==="
+	@echo "  scan-everything             Run ALL scans for a single IMAGE"
+	@echo "  scan-vulnerable-quarkus-local Scan ALL local qscan.io/vulnerable-quarkus images"
 	@echo ""
 	@echo "=== Direct Image Scanning ==="
 	@echo "  scan-all           Run all 4 scanners on the image"
