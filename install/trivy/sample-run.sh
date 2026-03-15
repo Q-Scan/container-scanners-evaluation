@@ -1,1 +1,1 @@
-trivy image python:3.4-alpine
+trivy image python:3.4-alpine --format sarif

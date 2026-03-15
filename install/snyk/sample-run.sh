@@ -1,1 +1,1 @@
-snyk container test python:3.4-alpine
+snyk container test python:3.4-alpine --sarif
