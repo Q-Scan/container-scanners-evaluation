@@ -1,1 +1,1 @@
-grype python:3.4-alpine -o sarif
+grype python:3.4-alpine --by-cve -o json
