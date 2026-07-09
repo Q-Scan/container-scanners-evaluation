@@ -19,9 +19,12 @@ SBOM_SCOUT_DIR := $(IMAGE_RESULTS_DIR)/sbom/scout
 
 # SBOM file paths
 SBOM_SYFT_FILE := $(SBOM_SYFT_DIR)/sbom.spdx.json
-SBOM_SYFT_NATIVE_FILE := $(SBOM_SYFT_DIR)/sbom.native.json
 SBOM_TRIVY_FILE := $(SBOM_TRIVY_DIR)/sbom.spdx.json
 SBOM_SCOUT_FILE := $(SBOM_SCOUT_DIR)/sbom.spdx.json
+
+# CycloneDX SBOM file paths (format-control experiment)
+SBOM_SYFT_CDX_FILE := $(SBOM_SYFT_DIR)/sbom.cdx.json
+SBOM_TRIVY_CDX_FILE := $(SBOM_TRIVY_DIR)/sbom.cdx.json
 
 GENERATORS := syft trivy scout
 SCANNERS := trivy grype snyk docker-scout
@@ -73,12 +76,11 @@ scan-all: $(foreach scan,$(SCANNERS),scan-$(scan))
 
 .PHONY: sbom-syft
 sbom-syft: $(SBOM_SYFT_DIR)
-	@if [ -f "$(SBOM_SYFT_FILE)" ] && [ -f "$(SBOM_SYFT_NATIVE_FILE)" ]; then \
+	@if [ -f "$(SBOM_SYFT_FILE)" ]; then \
 		echo "SBOM (Syft) already exists, skipping: $(SBOM_SYFT_FILE)"; \
 	else \
 		echo "Generating SBOM with Syft: $(IMAGE)"; \
 		syft $(IMAGE) -o spdx-json --enrich all | jq . > $(SBOM_SYFT_FILE); \
-		syft $(IMAGE) -o json --enrich all | jq . > $(SBOM_SYFT_NATIVE_FILE); \
 	fi
 
 .PHONY: sbom-trivy
@@ -114,12 +116,6 @@ scan-sbom-%-trivy: sbom-%
 	@SBOM_FILE=$(IMAGE_RESULTS_DIR)/sbom/$*/sbom.spdx.json; \
 	trivy sbom $$SBOM_FILE --format json --scanners vuln,license --output $(IMAGE_RESULTS_DIR)/sbom/$*/trivy.json
 
-# Extra rule for Syft + Grype (uses native JSON for comparison)
-.PHONY: scan-sbom-syft-grype-native
-scan-sbom-syft-grype-native: sbom-syft
-	@echo "Scanning syft SBOM with Grype (native format)"
-	grype sbom:$(SBOM_SYFT_NATIVE_FILE) --by-cve --add-cpes-if-none -o json --file $(SBOM_SYFT_DIR)/grype_native.json
-
 # This rule handles: scan-sbom-syft-grype, scan-sbom-trivy-grype, scan-sbom-scout-grype
 .PHONY: scan-sbom-%-grype
 scan-sbom-%-grype: sbom-%
@@ -151,8 +147,8 @@ scan-sbom-%-all: $(foreach scan,$(SCANNERS),scan-sbom-%-$(scan))
 # ============================================================================
 
 .PHONY: scan-sbom-all
-scan-sbom-all: $(foreach gen,$(GENERATORS),scan-sbom-$(gen)-all) scan-sbom-syft-grype-native
-	@echo "All SBOM-based scans completed (3 generators x 4 scanners + 1 native = 13 scans)"
+scan-sbom-all: $(foreach gen,$(GENERATORS),scan-sbom-$(gen)-all)
+	@echo "All SBOM-based scans completed (3 generators x 4 scanners = 12 scans)"
 
 .PHONY: scan-everything
 scan-everything: scan-all scan-sbom-all
@@ -160,8 +156,62 @@ scan-everything: scan-all scan-sbom-all
 	@echo "ALL SCANS COMPLETED!"
 	@echo "   - 4 direct image scans"
 	@echo "   - 3 SBOMs generated (Syft, Trivy, Docker Scout)"
-	@echo "   - 13 SBOM-based scans (4 scanners × 3 SBOMs + 1 native syft-grype)"
+	@echo "   - 12 SBOM-based scans (4 scanners × 3 SBOMs)"
 	@echo "   Results in $(IMAGE_RESULTS_DIR)/"
+
+# ============================================================================
+# CYCLONEDX FORMAT CONTROL (SPDX vs CycloneDX)
+# ----------------------------------------------------------------------------
+# A separate control that tests whether the SBOM *format* (not its content) is
+# responsible for the loss seen when exchanging SBOMs across tools. Scope:
+# 2 images x (Syft, Trivy) x 4 scanners = 16 configs. Docker Scout is omitted
+# as a generator here to keep the control matrix small. This is intentionally
+# OUTSIDE the 144-scan core matrix and is run explicitly, not by scan-everything.
+# ============================================================================
+
+.PHONY: sbom-cdx-syft
+sbom-cdx-syft: $(SBOM_SYFT_DIR)
+	@if [ -f "$(SBOM_SYFT_CDX_FILE)" ]; then \
+		echo "SBOM CycloneDX (Syft) already exists, skipping: $(SBOM_SYFT_CDX_FILE)"; \
+	else \
+		echo "Generating CycloneDX SBOM with Syft: $(IMAGE)"; \
+		syft $(IMAGE) -o cyclonedx-json --enrich all | jq . > $(SBOM_SYFT_CDX_FILE); \
+	fi
+
+.PHONY: sbom-cdx-trivy
+sbom-cdx-trivy: $(SBOM_TRIVY_DIR)
+	@if [ -f "$(SBOM_TRIVY_CDX_FILE)" ]; then \
+		echo "SBOM CycloneDX (Trivy) already exists, skipping: $(SBOM_TRIVY_CDX_FILE)"; \
+	else \
+		echo "Generating CycloneDX SBOM with Trivy: $(IMAGE)"; \
+		trivy image $(IMAGE) --format cyclonedx --scanners vuln --output $(SBOM_TRIVY_CDX_FILE); \
+	fi
+
+# Scan one CycloneDX SBOM (generator = syft|trivy) with all 4 scanners.
+# Handles: scan-sbom-cdx-syft, scan-sbom-cdx-trivy
+.PHONY: scan-sbom-cdx-%
+scan-sbom-cdx-%: sbom-cdx-%
+	@echo "Scanning $* CycloneDX SBOM with all 4 scanners"
+	@SBOM=$(IMAGE_RESULTS_DIR)/sbom/$*/sbom.cdx.json; DIR=$(IMAGE_RESULTS_DIR)/sbom/$*; \
+	trivy sbom $$SBOM --format json --scanners vuln --output $$DIR/trivy.cdx.json; \
+	grype sbom:$$SBOM --by-cve --add-cpes-if-none -o json --file $$DIR/grype.cdx.json; \
+	snyk sbom test --experimental --file=$$SBOM --json > $$DIR/snyk.cdx.json || true; \
+	docker scout cves sbom://$$SBOM --format sarif --output $$DIR/docker-scout.sarif.cdx.json
+
+# Images used for the CycloneDX control (one JVM, one native).
+CDX_CONTROL_IMAGES := \
+	qscan.io/vulnerable-quarkus:DOCKERFILE-jvm \
+	qscan.io/vulnerable-quarkus:DOCKERFILE-native
+
+.PHONY: scan-cyclonedx-control
+scan-cyclonedx-control:
+	@echo "CycloneDX vs SPDX control: 2 images x (Syft,Trivy) x 4 scanners = 16 scans"
+	@for img in $(CDX_CONTROL_IMAGES); do \
+		echo "== $$img =="; \
+		$(MAKE) scan-sbom-cdx-syft  IMAGE=$$img; \
+		$(MAKE) scan-sbom-cdx-trivy IMAGE=$$img; \
+	done
+	@echo "Done. Compare *.cdx.json against the SPDX results."
 
 # ============================================================================
 # BULK SCANNING TARGETS
@@ -189,6 +239,13 @@ scan-vulnerable-quarkus-local:
 # ============================================================================
 # UTILITIES
 # ============================================================================
+
+.PHONY: archives
+archives:
+	@echo "Repacking results/ and data/ (the archives are what git tracks, not the directories)"
+	python -m zipfile -c results.zip results
+	python -m zipfile -c data.zip data
+	@ls -lh results.zip data.zip
 
 .PHONY: clean
 clean:
@@ -221,15 +278,18 @@ help:
 	@echo "  sbom-all           				Generate SBOMs with all 3 generators"
 	@echo "  sbom-syft          				Generate SBOM with Syft"
 	@echo "  sbom-trivy         				Generate SBOM with Trivy"
-	@echo "  sbom-docker-scout  				Generate SBOM with Docker Scout"
+	@echo "  sbom-scout         				Generate SBOM with Docker Scout"
 	@echo ""
 	@echo "=== SBOM-based Scanning (by generator) ==="
 	@echo "  scan-sbom-all          			Run all scanners on all SBOMs (12 scans)"
 	@echo "  scan-sbom-syft-all      			Run all scanners on Syft SBOM"
 	@echo "  scan-sbom-trivy-all    			Run all scanners on Trivy SBOM"
 	@echo "  scan-sbom-scout-all    			Run all scanners on Docker Scout SBOM"
-	@echo "  scan-sbom-syft-grype-native  		Grype scan using Syft's NATIVE JSON format"
+	@echo ""
+	@echo "=== CycloneDX format control ==="
+	@echo "  scan-cyclonedx-control  			SPDX vs CycloneDX on 2 images x (Syft,Trivy) x 4 scanners"
 	@echo ""
 	@echo "=== Utilities ==="
+	@echo "  archives           				Repack results/ and data/ into results.zip, data.zip"
 	@echo "  clean              				Remove all results"
 	@echo "  help               				Show this help message"
