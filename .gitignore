@@ -208,3 +208,11 @@ __marimo__/
 
 .idea
 results
+
+# notebook export - regenerable (nbconvert --to html)
+analysis.html
+analysis/__pycache__/
+
+# Raw scans and the frozen oracle cache: shipped as results.zip / data.zip (see README)
+data/
+results/
